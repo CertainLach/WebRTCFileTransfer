@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style type="text/css">
+        body {
+            background: #999;
+        }
+        
+        h1 {
+            padding-left: 20px;
+        }
+        
+        table,
+        tr,
+        td,
+        html,
+        body {
+            margin: 0px;
+            padding: 0px;
+            border: none;
+        }
+        
+        thead {
+            color: #444;
+        }
+        
+        #status {
+            background: #888;
+            padding: 6px;
+        }
+        
+        button,
+        input {
+            background: #888;
+            border: 1px solid #777;
+        }
+        
+        #progressContainer {
+            background: #aaa;
+            height: 100%;
+            width: 30%;
+        }
+        
+        #progress {
+            background: green;
+            width: 0%;
+            transition: all 1s;
+            height: 100%;
+            display: block;
+        }
+        
+        .stage {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <table width="100%">
+        <thead>
+            <td>
+                <center>
+                    <h1>METEOR SHARE</h1>
+                </center>
+            </td>
+            <td id="progressContainer">
+                <div id="progress">
+
+                </div>
+            </td>
+        </thead>
+        <tbody>
+            <tr>
+                <td colspan="2" id="status">
+                    Loading js...
+                </td>
+            </tr>
+            <tr class="stage">
+                <td>
+                    Connect:
+                </td>
+                <td>
+                    <button onclick="send()">As sender</button>
+                    <button onclick="receive()">As receiver</button>
+                </td>
+            </tr>
+            <tr class="stage">
+                <td>
+                    Your id:
+                </td>
+                <td>
+                    <code id="senderId"></code>
+                </td>
+            </tr>
+            <tr class="stage">
+                <td>
+                    Enter sender id:
+                </td>
+                <td>
+                    <input id="clientSenderId"></input>
+                </td>
+            </tr>
+            <tr class="stage">
+                <td>
+                    Select file:
+                </td>
+                <td>
+                    <input id="file" type="file"></input>
+                </td>
+            </tr>
+            <tr class="stage">
+                <td colspan="2">
+                    <h4>Receiving file...</h4><br> File name: <code id="fileName">Unknown</code><br> File size: <code id="fileSize">Unknown</code><br> Received: <code id="receivedBytes">0</code><br> Receiving progress: <progress id="receiveProgress" />
+                </td>
+            </tr>
+            <tr class="stage">
+                <td colspan="2">
+                    <h4>Sending file...</h4><br> Sending progress: <progress id="sendProgress" />
+                </td>
+            </tr>
+            <tr class="stage">
+                <td colspan="2">
+                    <h1>Done! File was transfered!</h1>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <script type="text/javascript">
+        /*global File location RTCPeerConnection RTCIceCandidate RTCSessionDescription URL*/
+        let status = document.getElementById('status');
+        let progress = document.getElementById('progress');
+        let senderId = document.getElementById('senderId');
+        let fileSelector = document.getElementById('file');
+        let sendProgress = document.getElementById('sendProgress');
+        let receiveProgress = document.getElementById('receiveProgress');
+        let clientSenderId = document.getElementById('clientSenderId');
+        let receivedBytes = document.getElementById('receivedBytes');
+        let fileName = document.getElementById('fileName');
+        let fileSize = document.getElementById('fileSize');
+
+        let totalData = 0;
+        let receivedData = 0;
+        let nameData = '';
+
+        const signalServer = new WebSocket(location.href.replace('http', 'ws'));
+
+        function setStatus(text) {
+            status.innerHTML = text;
+        }
+        let currentStage = -1;
+
+        function setStage(id) {
+            let stages = document.getElementsByClassName('stage');
+            if (currentStage !== -1)
+                stages[currentStage].style.display = 'none';
+            if (id !== -1)
+                stages[id].style.display = 'block';
+            currentStage = id;
+            let proc = (currentStage + 1) * 100 / [...stages].length;
+            if (proc < 0) proc = 0;
+            proc = Math.round(proc);
+            progress.style.width = `${proc}%`;
+        }
+
+        let dataChannel = null;
+        let localConnection = null;
+        setStatus('JS loaded, connecting to signalling server...');
+        signalServer.onopen = () => {
+            setStatus('Connected to signal server!');
+            setStage(0);
+        };
+        signalServer.onclose = () => {
+            setStatus('Disconnected from signal server!');
+            setStage(-1);
+        };
+
+        function send() {
+            setStatus('Connecting as sender...');
+            signalServer.send('is');
+            setStage(-1);
+        }
+
+        function receive() {
+            setStatus('Connecting as receiver...');
+            signalServer.send('ic');
+            setStage(-1);
+        }
+        const pConfig = {
+            "iceServers": [{
+                "urls": ["stun:stun.l.google.com:19302"]
+            }],
+            "iceTransportPolicy": "all",
+            "rtcpMuxPolicy": "negotiate",
+            "iceCandidatePoolSize": "4"
+        };
+
+        const pConstraints = {
+            "optional": [{
+                "googIPv6": true
+            }]
+        };
+        signalServer.onmessage = msg => {
+            console.log(msg.data);
+            if (msg.data.indexOf('us') === 0) {
+                // S
+                senderId.innerHTML = msg.data.slice(2);
+                setStage(1);
+                setStatus('Connected as sender, waiting for receiver...');
+            }
+            else if (msg.data === 'ur') {
+                // R
+                setStage(2);
+                setStatus('Connected as receiver!');
+            }
+            else if (msg.data === 'ws') {
+                // R
+                setStatus('Wrong sender id!');
+                setTimeout(() => setStage(2), 2000);
+            }
+            else if (msg.data === 'bs') {
+                // R
+                setStatus('This sender is already busy!');
+                setTimeout(() => setStage(2), 2000);
+            }
+            else if (msg.data === 'rf') {
+                // S
+                setStatus('Receiver found, getting rtc candidate...');
+                setStage(-1);
+                localConnection = new RTCPeerConnection(pConfig, pConstraints);
+                dataChannel = localConnection.createDataChannel("file");
+                localConnection.onicecandidate = e => {
+                    console.log(e);
+                    signalServer.send('gc' + JSON.stringify(e.candidate));
+                    setStatus('Got candidate, waiting for receiver');
+                };
+                localConnection.createOffer().then(async desc => {
+                    setStatus('Offer created, setting local description...');
+                    await localConnection.setLocalDescription(desc);
+                    console.log(desc);
+                    setStatus('Done, sending sdp to receiver...');
+                    signalServer.send('sdp' + JSON.stringify(desc));
+                });
+            }
+            else if (msg.data === 'sf') {
+                // R
+                setStatus('Sender found, waiting for candidate...');
+                setStage(-1);
+                localConnection = new RTCPeerConnection(pConfig, pConstraints);
+                localConnection.onicecandidate = e => {
+                    console.log(e);
+                    signalServer.send('gc' + JSON.stringify(e.candidate));
+                    setStatus('Got candidate, waiting for sender');
+                };
+            }
+            else if (msg.data.indexOf('gc') === 0) {
+                // R
+                localConnection.addIceCandidate(new RTCIceCandidate(JSON.parse(msg.data.slice(2))));
+            }
+            else if (msg.data.indexOf('gdc') === 0) {
+                // S
+                setStatus('Client got data channel.');
+                setStage(3);
+            }
+            else if (msg.data.indexOf('sdp') === 0) {
+                // R
+                setStatus('Got sender data!');
+                localConnection.setRemoteDescription(new RTCSessionDescription(JSON.parse(msg.data.slice(3))));
+                localConnection.createAnswer(localConnection.remoteDescription).then(async desc => {
+                    setStatus('Answer created, setting local description');
+                    await localConnection.setLocalDescription(desc);
+                    console.log(desc);
+                    signalServer.send('cdp' + JSON.stringify(desc));
+                    setStatus('Waiting for server...');
+                });
+                localConnection.ondatachannel = e => {
+                    setStatus('Got data channel! Server choosing a file to send...');
+                    setStage(4);
+                    let channel = e.channel; //localConnection.createDataChannel('file');
+                    let data = [];
+                    channel.onmessage = m => {
+                        receivedData += m.data.length;
+                        data.push(m.data);
+                        receivedBytes.innerHTML = receivedData;
+                        receiveProgress.max = totalData;
+                        receiveProgress.value = receivedData;
+                        if (receivedData === totalData) {
+                            let properties = {
+                                type: 'plain/text'
+                            }; // Specify the file's mime-type.
+                            let file = new File(data, nameData, properties);
+                            let url = URL.createObjectURL(file);
+                            let a = document.createElement('a');
+                            a.href = url;
+                            a.download = nameData;
+                            a.click();
+                            setStatus('Done');
+                            setStage(6);
+                        }
+                    };
+                    channel.onopen = channel.onclose = channel.onerror = m => {
+                        console.log(m);
+                    };
+                    signalServer.send('gdc');
+                };
+            }
+            else if (msg.data.indexOf('cdp') === 0) {
+                // S
+                setStatus('Got receiver data!');
+                localConnection.setRemoteDescription(new RTCSessionDescription(JSON.parse(msg.data.slice(3))));
+            }
+            else if (msg.data.indexOf('fs') === 0) {
+                // R
+                setStatus('Sender selected file!');
+                let data = msg.data.substr(2).split('//\\\\');
+                let [file, size] = data;
+                fileName.innerHTML = file;
+                nameData = file;
+                fileSize.innerHTML = size;
+                console.log(size);
+                totalData = +size;
+            }
+        };
+        clientSenderId.onkeypress = e => {
+            if (e.code === 'Enter') {
+                setStatus('Connecting to sender...');
+                signalServer.send('ss' + e.target.value);
+                setStage(-1);
+                e.target.value = '';
+            }
+        };
+
+        fileSelector.onchange = e => {
+            setStatus('Reading file...');
+            let file = e.target.files[0];
+            signalServer.send('fs' + [file.name, file.size].join('//\\\\'));
+            setStage(5);
+            let reader = new FileReader();
+            reader.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    sendProgress.max = event.total;
+                    sendProgress.value = event.loaded;
+                }
+            };
+
+            reader.onloadend = function(event) {
+                var contents = event.target.result,
+                    error = event.target.error;
+
+                if (error != null) {
+                    setStatus('Error! ' + error);
+                }
+                else {
+                    sendProgress.max = 1;
+                    sendProgress.value = 1;
+                    setStatus('Waiting 3 seconds...');
+                    setTimeout(() => {
+                        setStatus('File got, now sending...');
+                        console.log(dataChannel);
+                        dataChannel.send(contents);
+                        setStatus('Done');
+                        setStage(6);
+                    }, 3000);
+                    //console.log("Contents: " + contents);
+                }
+            };
+
+            reader.readAsText(file);
+
+        };
+    </script>
+</body>
+
+</html>
